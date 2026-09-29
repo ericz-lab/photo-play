@@ -26,6 +26,6 @@ Without `SPACE_API_URL` and `SPACE_APP_TOKEN` the page opens but says generation
 
 ## Deploy
 
-`DEPLOY_HOST=<ssh host> ./deploy.sh`, then `POST /api/apps/sync` on that host. The ai-space there must include `POST /api/model/image` (ai-space commit `feat(model): make images through codex's image tool`).
+Push to a bare repository on the host whose `hooks/post-receive` is `deploy/post-receive` (checkout, install, sync, restart), or `DEPLOY_HOST=<ssh host> ./deploy.sh` and then `POST /api/apps/sync` there. The ai-space there must include `POST /api/model/image` (ai-space commit `feat(model): make images through codex's image tool`).
 
 This is an [ai-space](https://github.com/Zhang-Shubo/ai-space) app; the contract is its `docs/app-spec.md`.

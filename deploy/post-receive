@@ -1,0 +1,20 @@
+#!/bin/bash
+# Bare-repository hook on the host: checkout -> bun install -> ask ai-space to re-read the
+# workspace (a new app is registered and, under SPACE_SUPERVISOR=space, its unit written and
+# started) -> restart the unit for the new code. Install as ~/photo-play.git/hooks/post-receive (chmod +x).
+set -e; unset GIT_DIR
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+APP=photo-play
+WORK=${SPACE_HOME:-$HOME/.ai-space}/apps/$APP
+mkdir -p "$WORK"
+git --git-dir=$HOME/$APP.git --work-tree=$WORK checkout -f main
+cd "$WORK"
+~/.bun/bin/bun install --production --frozen-lockfile 2>&1 | tail -1
+TOKEN=$(grep "^SPACE_API_TOKEN=" "${SPACE_HOME:-$HOME/.ai-space}/.env" | cut -d= -f2-)
+curl -sS -m 30 -X POST "http://127.0.0.1:8700/api/apps/sync" -H "authorization: Bearer $TOKEN" -o /dev/null -w "  -> ai-space sync HTTP %{http_code}\n" || echo "  -> ai-space sync skipped"
+if systemctl --user cat "space-$APP.service" >/dev/null 2>&1; then
+  "$HOME/.local/bin/space" app restart "$APP"
+  echo "  -> $APP restarted (space-$APP.service)"
+else
+  echo "  -> no space-$APP.service yet; check: space app service $APP"
+fi
