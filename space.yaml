@@ -1,61 +1,43 @@
 # ai-space app manifest. Contract: ai-space docs/app-spec.md (spec 1).
-# Delete every section this app does not need; an empty section is worse than none.
 
 spec: 1
-name: photo-play                       # = directory = repository = unit = data directory
+name: photo-play
 title: PhotoPlay
-description: One sentence saying what the app does.
-icon: icon.svg                     # path in this repository, an emoji, or an http(s) URL
-# url: https://photo-play.example.com  # public entry; the panel shows a tile only when this is set
-status: active                     # active | paused | archived
-# repo: https://github.com/<owner>/photo-play.git
-# Display text in other languages, by language tag; the panel picks the reader's. Names are never translated.
-# i18n:
-#   zh:
-#     title: 我的应用
-#     description: 一句话说明这个应用做什么。
-#     agents: { assistant: { title: 助手, description: 回答关于这个应用及其数据的问题。 } }
-#     widgets: { latest: { title: 我的应用 · 最新 } }
+description: Travel photo effects - upload a photo, pick an effect, compare the versions and download; every edit is a new version and the original is kept.
+icon: icon.svg
+url: /
+status: active
+i18n:
+  zh:
+    title: 旅行出片
+    description: 上传一张旅行照片，选个玩法（清理背景、调光调色、明信片、手绘注释、自由描述），对比、继续改、下载；每次修改都是新版本，原图保留。
+    widgets:
+      recent: { title: 旅行出片 · 最近作品 }
 
 # The app's own process. ai-space hands over PORT; the process binds 127.0.0.1 only.
 service:
   command: bun src/index.ts
-  port: 8975                       # unique in the workspace: check GET /api/services
+  port: 8975
   health: /healthz
+  env:
+    NODE_ENV: "production"
 
-# Chat identities. Costs no code: a prompt file and a tool allow-list.
-agents:
-  - name: assistant
-    title: Assistant
-    description: Answers questions about this app and its data.
-    avatar: agents/assistant.svg   # required by the procedure: 64x64 rounded square (or an emoji); the app icon is the fallback
-    prompt: agents/assistant.md
-    tools: [Read, Grep, Glob, Bash(bun *)]
+# Pictures come from POST /api/model/image, which only codex-cli serves; the tag is the template id.
+model:
+  default: codex/intermediate
 
-# Panel cards. `items`: GET source -> { ok, items: [{ text, url?, time? }] }.
 widgets:
-  - name: latest
-    title: PhotoPlay · Latest
+  - name: recent
+    title: PhotoPlay · Recent
     kind: items
     source: /api/widget
     link: /
     size: 2x1
-    refresh: 60s
+    refresh: 2m
 
-# Scheduled work. One of at / every / schedule, one of run.http / run.command / run.agent.
-tasks:
-  - name: refresh
-    every: 30m
-    timeout: 10m
-    run:
-      http: { method: POST, url: "http://127.0.0.1:${PORT}/jobs/refresh" }
-    notify: { when: [error] }
-
-# Databases and blob stores ai-space provisions; the URLs arrive through space.env.
 storage:
-  database: sqlite                 # sqlite | postgres, or databases: [name, ...]
-  blobs: none                      # none | file | s3
+  database: sqlite
+  blobs: file
 
-# Chat channels this app may name; each must exist as SPACE_NOTIFY_<NAME> in the workspace .env.
-notify:
-  channels: [default]
+backup:
+  include: [databases, files, blobs]

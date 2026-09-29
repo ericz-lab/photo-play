@@ -1,44 +1,42 @@
 /**
- * Minimal ai-space app service. Contract (docs/app-spec.md, "service"):
- * read PORT, bind 127.0.0.1 only, answer GET /healthz with 200, log to stdout,
- * exit on SIGTERM within 10 seconds. Replace the handlers, keep the contract.
+ * PhotoPlay service. Contract (ai-space docs/app-spec.md, "service"): read
+ * PORT, bind 127.0.0.1 only, answer GET /healthz with 200, log to stdout,
+ * exit on SIGTERM within 10 seconds.
  */
+import { mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
+import index from "../web/index.html";
+import { createRoutes } from "./app.ts";
+import { blobDir, config, databasePath } from "./config.ts";
+import { Store } from "./db.ts";
+import { generate } from "./model.ts";
+import { Worker } from "./worker.ts";
 
-const port = Number(process.env.PORT ?? 8975);
-const publicBase = (process.env.PUBLIC_BASE ?? "").replace(/\/$/, "");
-
-type WidgetItem = { text: string; url?: string; time?: string };
-
-/** Widget feed: at most twenty items, newest first. Return { ok: false, error } when the data is unavailable. */
-async function widget(): Promise<{ ok: true; items: WidgetItem[] } | { ok: false; error: string }> {
-  return { ok: true, items: [{ text: "Hello from photo-play", url: publicBase || undefined, time: new Date().toISOString() }] };
-}
-
-/** One round of work for the `refresh` task. Report honestly; the scheduler records the verdict. */
-async function refresh(): Promise<{ status: "ok" | "error" | "skipped"; error?: string }> {
-  return { status: "ok" };
-}
-
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8" } });
+const dbPath = databasePath();
+if (dbPath !== ":memory:") await mkdir(dirname(dbPath), { recursive: true });
+const store = new Store(dbPath, blobDir());
+const interrupted = store.recoverInterrupted();
+if (interrupted) console.log(`[photo-play] ${interrupted} job(s) cut off by the last stop marked for checking`);
+const worker = new Worker(store, generate, config.jobTimeoutSec * 1000);
 
 const server = Bun.serve({
   hostname: "127.0.0.1",
-  port,
-  routes: {
-    "/healthz": () => new Response("ok"),
-    "/api/widget": async () => json(await widget()),
-    "/jobs/refresh": { POST: async () => json(await refresh()) },
-  },
+  port: config.port,
+  idleTimeout: 60,
+  maxRequestBodySize: config.maxUploadBytes + 1024 * 1024,
+  routes: { "/": index, ...createRoutes({ store, worker, maxUploadBytes: config.maxUploadBytes, publicBase: config.publicBase }) },
   fetch: () => new Response("not found", { status: 404 }),
+  development: process.env.NODE_ENV !== "production" ? { hmr: true, console: true } : false,
 });
 
 console.log(`[photo-play] listening on http://127.0.0.1:${server.port}`);
+void worker.kick();
 
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.on(signal, () => {
     console.log(`[photo-play] ${signal}, shutting down`);
     server.stop();
-    setTimeout(() => process.exit(0), 8_000).unref();
+    // A job still running is marked for checking on the next boot; it is not retried.
+    setTimeout(() => process.exit(0), 500).unref();
   });
 }

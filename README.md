@@ -1,25 +1,31 @@
-# PhotoPlay
+# PhotoPlay 旅行出片
 
-One sentence saying what the app does, for the person who will use it.
+Upload a travel photo, pick an effect, adjust a few settings, and get a new version to compare and download. You don't write any prompts. Every edit is a separate version. The original and older versions are never overwritten, and you can continue from any result or redo from the original.
+
+MVP effects: clean up the background, light and colour, travel postcard, hand-drawn notes, and free description. On postcards and notes, the title, place and date are drawn by the page over the picture rather than by the model. They come out exact, and fixing a typo costs no new generation.
 
 ## Use
 
-- Open the app at its public URL (set as `url:` in `space.yaml`), or on the host at `http://127.0.0.1:8975`.
-- The panel shows the `latest` widget and lets you chat with the `assistant` agent.
+- Open the app at its public URL (`url: /` in `space.yaml` resolves to `https://photo-play.<SPACE_DOMAIN>/`), or on the host at `http://127.0.0.1:8975`.
+- The panel shows the `recent` widget.
+- Generation takes one to three minutes per picture. It runs on the server, one at a time, so closing the page loses nothing.
+
+## How pictures are made
+
+Through ai-space's model service, `POST /api/model/image`: the space runs Codex's image tool and records the call in its ledger. The app holds no key and spawns no CLI. `model.default: codex/intermediate` in `space.yaml` picks the runtime, and the panel can override it per tag (the tag is the template id). The image tool's own cost is not reported, so the page says the cost is unknown.
 
 ## Run locally
 
 ```bash
 bun install
-cp .env.example .env      # fill in real values; never commit .env
-PORT=8975 bun src/index.ts
-curl -s http://127.0.0.1:8975/healthz
+PORT=8975 SPACE_API_URL=http://127.0.0.1:8700 SPACE_APP_TOKEN=... bun src/index.ts
+bun run check            # typecheck + tests
 ```
 
-Inside an ai-space workspace the provisioned variables (`DATABASE_URL`, `BLOB_URL`, ...) come from `<workspace>/data/photo-play/space.env`. For local development against the same values: `eval "$(bun <ai-space>/src/index.ts env photo-play)"`.
+Without `SPACE_API_URL` and `SPACE_APP_TOKEN` the page opens but says generation is not ready.
 
 ## Deploy
 
-`DEPLOY_HOST=<ssh host> ./deploy.sh` syncs the checkout into `<workspace>/apps/photo-play`, installs the user-level systemd unit and checks `/healthz`. The workspace is `SPACE_HOME` when explicitly set, otherwise the target machine's installed ai-space unit's `SPACE_HOME`, otherwise `~/.ai-space` on that machine. `SPACE_HOME=/srv/space` selects a custom workspace; `DEPLOY_PATH` can independently override the app checkout. Relative paths and `~/` resolve under the remote user's home. The app unit reads provisioned variables from the selected workspace's `data/photo-play/space.env`. See [AGENTS.md](AGENTS.md) for the host details once it is live.
+`DEPLOY_HOST=<ssh host> ./deploy.sh`, then `POST /api/apps/sync` on that host. The ai-space there must include `POST /api/model/image` (ai-space commit `feat(model): make images through codex's image tool`).
 
 This is an [ai-space](https://github.com/Zhang-Shubo/ai-space) app; the contract is its `docs/app-spec.md`.
