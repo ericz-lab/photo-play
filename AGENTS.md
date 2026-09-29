@@ -57,7 +57,10 @@ See `.env.example`. Provided by ai-space: `PORT`, `SPACE_APP`, `SPACE_APP_DIR`, 
 
 ## Deployment
 
-Fill in once live: host, workspace path, unit name, port, deploy command, public URL, tunnel or access rule id.
+- Host: the space host (ssh alias `<host>`), workspace `~/.ai-space`, `SPACE_SUPERVISOR=space`: the unit is `space-photo-play.service`, written by ai-space.
+- Deploy: `git push deploy main` (bare repository `~/photo-play.git`, hook = `deploy/post-receive`: checkout, `bun install`, `POST /api/apps/sync`, restart). GitHub: `origin` (private).
+- Port 8975, public URL `https://photo-play.<SPACE_DOMAIN>/` through the space's router.
+- Pictures: The host's `codex` runtime runs over ssh on another machine's Codex login (the space's `runtimes.yaml`); `model.default: codex/intermediate` pins it, because the space's default runtime there is Claude Code, which makes no images.
 
 ## Known pitfalls
 
