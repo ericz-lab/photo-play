@@ -29,6 +29,7 @@ src/app.ts           * HTTP routes
 src/db.ts            * schema, assets (hash-named files), artworks, jobs
 src/templates.ts     * effects: parameters, prompts, overlay fields
 src/worker.ts          one-at-a-time job runner
+src/widget.ts          the panel card: items and state blocks
 src/model.ts           ai-space model-service client
 src/images.ts          type sniffing, dimensions, EXIF stripping
 web/                   the page (index.html, app.ts, styles.css)
@@ -38,7 +39,7 @@ deploy/, deploy.sh     systemd unit and rsync deploy
 ## Conventions
 
 - Page routes trust loopback (the edge holds the login); the page never holds a token.
-- Widget contract: `GET /api/widget` -> `{ ok: true, items: [{ text, url, time }] }`, newest first, at most twenty.
+- Widget contract: `GET /api/widget` -> `{ ok: true, items: [{ text, url, time }], asOf, staleAfter, blocks }` (`src/widget.ts`): items newest first, at most twenty, kept for older panels; blocks are the state card (latest work, queue, retries, versions per day, totals).
 - Tests sit next to the code, use `:memory:` databases and a stand-in generator; no network, no model.
 - English in code, comments, docs and commits; the page is Chinese.
 

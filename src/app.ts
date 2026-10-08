@@ -3,6 +3,7 @@ import { ready as defaultReady } from "./model.ts";
 import { buildPrompt, cleanParams, overlayOf, publicTemplates, template } from "./templates.ts";
 import type { Asset, Job } from "./types.ts";
 import type { Worker } from "./worker.ts";
+import { widgetPayload } from "./widget.ts";
 
 /**
  * The HTTP API the page uses. Page routes trust loopback: the space's edge
@@ -217,13 +218,7 @@ export function createRoutes(deps: AppDeps): Routes {
     "/api/widget": {
       GET: () => {
         try {
-          const base = deps.publicBase ?? "";
-          const items = store.listArtworks({ limit: 20 }).map((a) => {
-            const v = artworkView(a.id)!;
-            const label = v.title || `作品 #${a.id}`;
-            return { text: `${label} · ${v.versions} 个版本${v.pending ? `，${v.pending} 个生成中` : ""}`, url: `${base}/#/a/${a.id}`, time: a.updatedAt };
-          });
-          return json({ ok: true, items });
+          return json(widgetPayload(store, (a) => artworkView(a.id)!, deps.publicBase ?? ""));
         } catch (e) {
           return json({ ok: false, error: (e as Error).message });
         }
