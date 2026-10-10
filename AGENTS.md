@@ -66,3 +66,7 @@ See `.env.example`. Provided by ai-space: `PORT`, `SPACE_APP`, `SPACE_APP_DIR`, 
 ## Known pitfalls
 
 - Record every trap the moment it is hit; this section is the one that pays for itself.
+
+## Usage measurement
+
+App pages load `/_space/usage.js` at runtime through the Space router. It records visible, recently active time without page content or credentials. Refresh existing tabs after deployment; earlier unmeasured time cannot be recovered. Direct-port access has no Space heartbeat endpoint. `usage.test.ts` checks every application page loader; run it with `bun test usage.test.ts`.
