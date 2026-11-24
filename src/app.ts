@@ -1,4 +1,5 @@
-import { Conflict, NotFound, type Store } from "./db.ts";
+import type { Store } from "./db.ts";
+import { AppError, badRequest, notFound, unavailable } from "./errors.ts";
 import { ready as defaultReady } from "./model.ts";
 import { buildPrompt, cleanParams, overlayOf, publicTemplates, template } from "./templates.ts";
 import type { Asset, Job } from "./types.ts";
@@ -35,7 +36,6 @@ export function createRoutes(deps: AppDeps): Routes {
     const t = template(j.templateId);
     return {
       ...j,
-      templateName: t?.name ?? j.templateId,
       overlayStyle: t?.overlay ?? "none",
       result: assetView(j.resultId ? store.getAsset(j.resultId) : null),
       ahead: j.status === "queued" ? store.aheadOf(j.id) : 0,
@@ -58,34 +58,29 @@ export function createRoutes(deps: AppDeps): Routes {
   };
   const idOf = (req: Req) => {
     const n = Number(req.params.id);
-    if (!Number.isSafeInteger(n) || n <= 0) throw new BadRequest("id 不正确");
+    if (!Number.isSafeInteger(n) || n <= 0) throw badRequest("bad_id", "not an id");
     return n;
   };
 
   /** Create the job, or return the one this key already made, and start the worker. */
   const submit = (input: { artworkId: number; parentId: number | null; templateId: string; params: unknown; extra: unknown; key: unknown }) => {
-    if (typeof input.key !== "string" || !KEY.test(input.key)) throw new BadRequest("缺少提交标识 key");
+    if (typeof input.key !== "string" || !KEY.test(input.key)) throw badRequest("missing_key", "the submission key is missing");
     const art = store.getArtwork(input.artworkId);
-    if (!art) throw new NotFound("作品不存在");
+    if (!art) throw notFound("artwork_not_found", "no such artwork");
     const t = template(input.templateId);
-    if (!t) throw new BadRequest("没有这个玩法");
+    if (!t) throw badRequest("no_template", "no such effect");
     let baseId = art.originalId;
     if (input.parentId !== null) {
       const parent = store.getJob(input.parentId);
-      if (!parent || parent.artworkId !== art.id) throw new BadRequest("基础版本不属于这个作品");
-      if (parent.status !== "done" || !parent.resultId) throw new BadRequest("基础版本还没有生成成功");
+      if (!parent || parent.artworkId !== art.id) throw badRequest("base_other_artwork", "that version belongs to another artwork");
+      if (parent.status !== "done" || !parent.resultId) throw badRequest("base_not_done", "that version was not made");
       baseId = parent.resultId;
     }
     const r = ready();
-    if (!r.ok) throw new Unavailable(r.reason ?? "暂时无法生成");
-    let params;
-    try {
-      params = cleanParams(t, input.params);
-    } catch (e) {
-      throw new BadRequest((e as Error).message);
-    }
+    if (!r.ok) throw unavailable(r.reason ?? "not_ready", "generating is not available");
+    const params = cleanParams(t, input.params);
     const extra = typeof input.extra === "string" ? input.extra.replace(/\s+/g, " ").trim() : "";
-    if (extra.length > 300) throw new BadRequest("补充要求最多 300 个字");
+    if (extra.length > 300) throw badRequest("extra_length", "at most 300 characters", { max: 300 });
     const { job, created } = store.createJob({ artworkId: art.id, parentId: input.parentId, baseId, templateId: t.id, templateVersion: t.version, params, extra, overlay: overlayOf(t, params), prompt: buildPrompt(t, params, extra), key: input.key });
     void worker.kick();
     return json({ ok: true, created, job: jobView(store.getJob(job.id)!) }, created ? 201 : 200);
@@ -101,9 +96,9 @@ export function createRoutes(deps: AppDeps): Routes {
     "/api/assets": {
       POST: wrap(async (req) => {
         const bytes = new Uint8Array(await req.arrayBuffer());
-        if (!bytes.length) throw new BadRequest("没有收到图片");
-        if (bytes.length > deps.maxUploadBytes) throw new BadRequest(`图片超过 ${Math.round(deps.maxUploadBytes / 1024 / 1024)} MB`);
-        const a = await store.putAsset(bytes, "upload").catch((e) => { throw new BadRequest((e as Error).message); });
+        if (!bytes.length) throw badRequest("no_picture", "no picture received");
+        if (bytes.length > deps.maxUploadBytes) throw badRequest("picture_too_large", "the picture is too large", { mb: Math.round(deps.maxUploadBytes / 1024 / 1024) });
+        const a = await store.putAsset(bytes, "upload");
         return json({ ok: true, asset: assetView(a) }, 201);
       }),
     },
@@ -111,7 +106,7 @@ export function createRoutes(deps: AppDeps): Routes {
     "/api/assets/:id": {
       GET: wrap(async (req) => {
         const a = store.getAsset(idOf(req));
-        if (!a) throw new NotFound("图片不存在");
+        if (!a) throw notFound("picture_not_found", "no such picture");
         const headers: Record<string, string> = { "content-type": a.type, "cache-control": "private, max-age=31536000, immutable" };
         const name = new URL(req.url).searchParams.get("name");
         if (name !== null) headers["content-disposition"] = `attachment; filename="${(name.replace(/[^A-Za-z0-9._-]/g, "") || `photo-${a.id}`)}.${a.file.split(".").pop()}"`;
@@ -123,12 +118,12 @@ export function createRoutes(deps: AppDeps): Routes {
     "/api/assets/:id/thumb": {
       PUT: wrap(async (req) => {
         const a = store.getAsset(idOf(req));
-        if (!a) throw new NotFound("图片不存在");
-        if (a.kind === "thumb") throw new BadRequest("缩略图不能再有缩略图");
+        if (!a) throw notFound("picture_not_found", "no such picture");
+        if (a.kind === "thumb") throw badRequest("thumb_of_thumb", "a thumbnail has no thumbnail");
         const bytes = new Uint8Array(await req.arrayBuffer());
-        if (!bytes.length || bytes.length > MAX_THUMB_BYTES) throw new BadRequest("缩略图大小不合适");
-        const t = await store.putAsset(bytes, "thumb").catch((e) => { throw new BadRequest((e as Error).message); });
-        if (Math.max(t.width, t.height) > 800) throw new BadRequest("缩略图太大");
+        if (!bytes.length || bytes.length > MAX_THUMB_BYTES) throw badRequest("thumb_size", "the thumbnail is the wrong size");
+        const t = await store.putAsset(bytes, "thumb");
+        if (Math.max(t.width, t.height) > 800) throw badRequest("thumb_size", "the thumbnail is the wrong size");
         store.setThumb(a.id, t.id);
         return json({ ok: true, thumb: assetView(t) });
       }),
@@ -144,7 +139,7 @@ export function createRoutes(deps: AppDeps): Routes {
         const body = await readJson(req);
         const assetId = Number(body.assetId);
         const a = Number.isSafeInteger(assetId) ? store.getAsset(assetId) : null;
-        if (!a || a.kind !== "upload") throw new BadRequest("请先上传一张照片");
+        if (!a || a.kind !== "upload") throw badRequest("upload_first", "upload a photo first");
         const title = typeof body.title === "string" ? body.title.trim().slice(0, 60) : "";
         return json({ ok: true, artwork: artworkView(store.createArtwork(a.id, title).id) }, 201);
       }),
@@ -153,14 +148,14 @@ export function createRoutes(deps: AppDeps): Routes {
     "/api/artworks/:id": {
       GET: wrap((req) => {
         const view = artworkView(idOf(req));
-        if (!view) throw new NotFound("作品不存在");
+        if (!view) throw notFound("artwork_not_found", "no such artwork");
         return json({ ok: true, artwork: view, jobs: store.jobsOf(view.id).map(jobView) });
       }),
       PATCH: wrap(async (req) => {
         const id = idOf(req);
-        if (!store.getArtwork(id)) throw new NotFound("作品不存在");
+        if (!store.getArtwork(id)) throw notFound("artwork_not_found", "no such artwork");
         const body = await readJson(req);
-        if (typeof body.title !== "string") throw new BadRequest("title 应为文字");
+        if (typeof body.title !== "string") throw badRequest("bad_title", "title must be text");
         store.renameArtwork(id, body.title.trim().slice(0, 60));
         return json({ ok: true, artwork: artworkView(id) });
       }),
@@ -178,7 +173,7 @@ export function createRoutes(deps: AppDeps): Routes {
     "/api/jobs/:id": {
       GET: wrap((req) => {
         const j = store.getJob(idOf(req));
-        if (!j) throw new NotFound("任务不存在");
+        if (!j) throw notFound("job_not_found", "no such job");
         return json({ ok: true, job: jobView(j) });
       }),
     },
@@ -187,8 +182,8 @@ export function createRoutes(deps: AppDeps): Routes {
     "/api/jobs/:id/retry": {
       POST: wrap(async (req) => {
         const j = store.getJob(idOf(req));
-        if (!j) throw new NotFound("任务不存在");
-        if (j.status !== "failed" && j.status !== "unknown") throw new BadRequest("只有失败或待核对的任务可以重试");
+        if (!j) throw notFound("job_not_found", "no such job");
+        if (j.status !== "failed" && j.status !== "unknown") throw badRequest("not_retryable", "only a failed or unconfirmed job can be retried");
         const body = await readJson(req);
         return submit({ artworkId: j.artworkId, parentId: j.parentId, templateId: j.templateId, params: { ...j.params, ...j.overlay }, extra: j.extra, key: body.key });
       }),
@@ -197,16 +192,16 @@ export function createRoutes(deps: AppDeps): Routes {
     "/api/jobs/:id/overlay": {
       PATCH: wrap(async (req) => {
         const j = store.getJob(idOf(req));
-        if (!j) throw new NotFound("任务不存在");
+        if (!j) throw notFound("job_not_found", "no such job");
         const t = template(j.templateId);
-        if (!t || t.overlay === "none") throw new BadRequest("这个玩法没有文字排版");
+        if (!t || t.overlay === "none") throw badRequest("no_overlay", "this effect has no words layer");
         const body = await readJson(req);
         const raw = body.overlay && typeof body.overlay === "object" ? (body.overlay as Record<string, unknown>) : {};
         const overlay: Record<string, string> = {};
         for (const p of t.params) {
           if (p.kind === "select" || p.kind === "range" || !p.overlay) continue;
           const v = String(raw[p.key] ?? "").replace(/\s+/g, " ").trim();
-          if (v.length > p.maxLength) throw new BadRequest(`${p.label}：最多 ${p.maxLength} 个字`);
+          if (v.length > p.maxLength) throw badRequest("param_length", `${p.key}: at most ${p.maxLength} characters`, { param: p.key, max: p.maxLength });
           overlay[p.key] = v;
         }
         for (const k of ["position", "scale"]) if (typeof raw[k] === "string" && /^[a-z0-9.-]{1,16}$/.test(raw[k] as string)) overlay[k] = raw[k] as string;
@@ -227,12 +222,9 @@ export function createRoutes(deps: AppDeps): Routes {
   };
 }
 
-class BadRequest extends Error {}
-class Unavailable extends Error {}
-
 async function readJson(req: Request): Promise<Record<string, unknown>> {
   const body = await req.json().catch(() => null);
-  if (!body || typeof body !== "object" || Array.isArray(body)) throw new BadRequest("请求体应为 JSON 对象");
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw badRequest("bad_json", "the body must be a JSON object");
   return body as Record<string, unknown>;
 }
 
@@ -241,9 +233,9 @@ function wrap(h: Handler): Handler {
     try {
       return await h(req);
     } catch (e) {
-      const status = e instanceof BadRequest ? 400 : e instanceof NotFound ? 404 : e instanceof Conflict ? 409 : e instanceof Unavailable ? 503 : 500;
-      if (status === 500) console.error("[photo-play]", e);
-      return json({ ok: false, error: (e as Error).message }, status);
+      if (e instanceof AppError) return json({ ok: false, error: e.message, code: e.code, params: e.params }, e.status);
+      console.error("[photo-play]", e);
+      return json({ ok: false, error: (e as Error).message, code: "internal" }, 500);
     }
   };
 }

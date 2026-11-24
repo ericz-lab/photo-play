@@ -26,7 +26,7 @@ export class Worker {
     const job = this.store.getJob(id)!;
     const base = this.store.getAsset(job.baseId);
     this.store.markRunning(id);
-    if (!base) return this.store.finishJob(id, "failed", { error: "底图不存在" });
+    if (!base) return this.store.finishJob(id, "failed", { error: "the picture to start from is gone" });
     const started = Date.now();
     let answer;
     try {
@@ -45,7 +45,7 @@ export class Worker {
       this.store.finishJob(id, "done", { ...meta, resultId: result.id, text: answer.text });
       this.log(`job ${id} done in ${Math.round((Date.now() - started) / 1000)}s`);
     } catch (e) {
-      this.store.finishJob(id, "failed", { ...meta, error: `结果无法保存：${(e as Error).message}` });
+      this.store.finishJob(id, "failed", { ...meta, error: `the result could not be saved: ${(e as Error).message}` });
     }
   }
 }

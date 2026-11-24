@@ -6,6 +6,7 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import index from "../web/index.html";
+import iconFile from "../icon.svg" with { type: "file" };
 import { createRoutes } from "./app.ts";
 import { blobDir, config, databasePath } from "./config.ts";
 import { Store } from "./db.ts";
@@ -28,7 +29,11 @@ const server = Bun.serve({
   port: config.port,
   idleTimeout: 60,
   maxRequestBodySize: config.maxUploadBytes + 1024 * 1024,
-  routes: { "/": index, ...createRoutes({ store, worker, maxUploadBytes: config.maxUploadBytes, publicBase: config.publicBase }) },
+  routes: {
+    "/": index,
+    "/icon.svg": () => new Response(Bun.file(iconFile), { headers: { "content-type": "image/svg+xml", "cache-control": "public, max-age=86400" } }),
+    ...createRoutes({ store, worker, maxUploadBytes: config.maxUploadBytes, publicBase: config.publicBase }),
+  },
   fetch: () => new Response("not found", { status: 404 }),
   development: process.env.NODE_ENV !== "production" ? { hmr: true, console: true } : false,
 });

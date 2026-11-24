@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { mkdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { dimensions, EXT, type ImageType, sniff, stripMetadata } from "./images.ts";
+import { badRequest, conflict, notFound } from "./errors.ts";
 import type { Artwork, Asset, Job, JobStatus } from "./types.ts";
 
 /**
@@ -75,10 +76,10 @@ export class Store {
   /** Keep image bytes: type checked from the bytes, EXIF dropped, stored once per content. Throws with the reason. */
   async putAsset(raw: Uint8Array, kind: Asset["kind"]): Promise<Asset> {
     const type = sniff(raw);
-    if (!type) throw new Error("只支持 JPEG、PNG 或 WebP 图片");
+    if (!type) throw badRequest("image_type", "only JPEG, PNG or WebP pictures");
     const bytes = stripMetadata(raw, type);
     const size = dimensions(bytes, type);
-    if (!size || size.width < 16 || size.height < 16) throw new Error("读不出图片尺寸，文件可能已损坏");
+    if (!size || size.width < 16 || size.height < 16) throw badRequest("image_size", "the picture's size cannot be read; the file may be damaged");
     const sha = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
     const existing = this.db.query("SELECT * FROM assets WHERE sha256 = ?").get(sha) as Row | null;
     if (existing) return asset(existing);
@@ -131,9 +132,9 @@ export class Store {
    */
   async deleteArtwork(id: number): Promise<{ removedFiles: number }> {
     const art = this.getArtwork(id);
-    if (!art) throw new NotFound("作品不存在");
+    if (!art) throw notFound("artwork_not_found", "no such artwork");
     const busy = this.db.query("SELECT COUNT(*) AS n FROM jobs WHERE artwork_id = ? AND status IN ('queued', 'running')").get(id) as { n: number };
-    if (busy.n) throw new Conflict("还有版本在生成，完成后再删除");
+    if (busy.n) throw conflict("artwork_busy", "a version is still being made; delete it after that");
     const jobs = this.jobsOf(id);
     const candidates = new Set<number>([art.originalId, ...jobs.flatMap((j) => [j.baseId, ...(j.resultId ? [j.resultId] : [])])]);
     this.db.transaction(() => {
@@ -211,7 +212,7 @@ export class Store {
    */
   recoverInterrupted(): number {
     return this.db.query("UPDATE jobs SET status = 'unknown', error = ?, finished_at = ? WHERE status = 'running'")
-      .run("服务在生成过程中重启，结果无法确认；没有自动重试，请确认后手动重试", this.now()).changes;
+      .run("the service restarted while this was being made; the result cannot be confirmed and it was not retried", this.now()).changes;
   }
 
   private touch(artworkId: number) {
@@ -219,8 +220,6 @@ export class Store {
   }
 }
 
-export class NotFound extends Error {}
-export class Conflict extends Error {}
 
 function asset(r: Row): Asset {
   return { id: r.id as number, sha256: r.sha256 as string, kind: r.kind as Asset["kind"], type: r.type as ImageType, width: r.width as number, height: r.height as number, bytes: r.bytes as number, file: r.file as string, thumbId: (r.thumb_id as number | null) ?? null, createdAt: r.created_at as string };

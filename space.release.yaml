@@ -6,7 +6,7 @@
 
 spec: 2
 name: photo-play
-version: 0.1.0
+version: 0.2.0
 title: PhotoPlay
 description: Travel photo effects - upload a photo, pick an effect, compare the versions and download; every edit is a new version and the original is kept.
 icon: icon.svg

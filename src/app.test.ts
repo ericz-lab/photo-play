@@ -72,7 +72,7 @@ test("upload, one edit, the version with its result, and the file served back", 
   const { body } = await call(`/api/artworks/${artworkId}`);
   expect(body.artwork.versions).toBe(1);
   const job = body.jobs[0];
-  expect(job).toMatchObject({ status: "done", templateName: "调光调色", model: "gpt-6-sol", runtime: "codex", callId: 42, text: "Made a warmer version." });
+  expect(job).toMatchObject({ status: "done", model: "gpt-6-sol", runtime: "codex", callId: 42, text: "Made a warmer version." });
   expect(job.result).toMatchObject({ width: 64, height: 48, type: "image/png" });
   expect(body.artwork.cover.id).toBe(job.result.id);
   const file = await fetch(`${base}${job.result.url}?name=v1`);
@@ -182,12 +182,12 @@ test("uploads are checked: type, size, and EXIF-free storage", async () => {
 });
 
 test("not connected to ai-space: jobs are refused with the reason", async () => {
-  const s2 = Bun.serve({ port: 0, routes: createRoutes({ store, worker, maxUploadBytes: 1024 * 1024, ready: () => ({ ok: false, reason: "未接入 ai-space" }) }), fetch: () => new Response("nf", { status: 404 }) });
+  const s2 = Bun.serve({ port: 0, routes: createRoutes({ store, worker, maxUploadBytes: 1024 * 1024, ready: () => ({ ok: false, reason: "not_connected" }) }), fetch: () => new Response("nf", { status: 404 }) });
   try {
     const { artworkId } = await artworkWithPhoto();
     const r = await fetch(`http://127.0.0.1:${s2.port}/api/jobs`, { method: "POST", body: JSON.stringify({ artworkId, parentId: null, templateId: "light", params: {}, key: "ready-key-1" }) });
     expect(r.status).toBe(503);
-    expect(((await r.json()) as { error: string }).error).toBe("未接入 ai-space");
+    expect(((await r.json()) as { code: string }).code).toBe("not_connected");
     expect(((await (await fetch(`http://127.0.0.1:${s2.port}/api/status`)).json()) as { ready: boolean }).ready).toBe(false);
   } finally {
     s2.stop(true);

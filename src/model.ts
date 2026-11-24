@@ -18,14 +18,15 @@ type Call = { id?: number; model?: string; runtime?: string; usage?: Usage };
 
 export type Generator = (call: ImageCall, signal?: AbortSignal) => Promise<ImageAnswer>;
 
+/** `reason` is a code the page translates (web/i18n.ts, `reason.<code>`). */
 export function ready(): { ok: boolean; reason?: string } {
-  if (!config.spaceApiUrl || !config.spaceAppToken) return { ok: false, reason: "未接入 ai-space（缺少 SPACE_API_URL 或 SPACE_APP_TOKEN），暂时无法生成" };
+  if (!config.spaceApiUrl || !config.spaceAppToken) return { ok: false, reason: "not_connected" };
   return { ok: true };
 }
 
 export const generate: Generator = async (call, signal) => {
   const r = ready();
-  if (!r.ok) return { ok: false, error: r.reason! };
+  if (!r.ok) return { ok: false, error: "not connected to ai-space (SPACE_API_URL or SPACE_APP_TOKEN is missing)" };
   let res: Response;
   try {
     res = await fetch(`${config.spaceApiUrl}/api/model/image`, {
@@ -37,13 +38,13 @@ export const generate: Generator = async (call, signal) => {
       timeout: false,
     } as RequestInit);
   } catch (e) {
-    return { ok: false, error: `连不上 ai-space：${(e as Error).message}` };
+    return { ok: false, error: `cannot reach ai-space: ${(e as Error).message}` };
   }
   const body = (await res.json().catch(() => null)) as { ok?: boolean; error?: string; text?: string; images?: { type: string; data: string }[]; call?: Call } | null;
   const meta = { model: body?.call?.model, runtime: body?.call?.runtime, callId: body?.call?.id, usage: body?.call?.usage };
-  if (!body) return { ok: false, error: `ai-space 返回了无法解析的内容（HTTP ${res.status}）` };
+  if (!body) return { ok: false, error: `ai-space answered something unreadable (HTTP ${res.status})` };
   if (!res.ok || !body.ok) return { ok: false, error: body.error || `HTTP ${res.status}`, ...meta };
   const first = body.images?.[0];
-  if (!first) return { ok: false, error: "模型没有返回图片", ...meta };
+  if (!first) return { ok: false, error: "the model returned no picture", ...meta };
   return { ok: true, image: new Uint8Array(Buffer.from(first.data, "base64")), text: body.text ?? "", ...meta };
 };

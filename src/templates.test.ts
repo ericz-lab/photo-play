@@ -13,10 +13,10 @@ test("every template builds a prompt from its defaults that forbids lettering", 
 test("parameters are checked against the template", () => {
   const light = template("light")!;
   expect(cleanParams(light, { tone: "film", strength: "3", junk: 1 })).toEqual({ tone: "film", strength: 3 });
-  expect(() => cleanParams(light, { tone: "neon" })).toThrow("色调");
-  expect(() => cleanParams(light, { strength: 9 })).toThrow("调整程度");
-  expect(() => cleanParams(template("free")!, {})).toThrow("请填写");
-  expect(() => cleanParams(template("postcard")!, { title: "长".repeat(30) })).toThrow("最多");
+  expect(() => cleanParams(light, { tone: "neon" })).toThrow("tone");
+  expect(() => cleanParams(light, { strength: 9 })).toThrow("strength");
+  expect(() => cleanParams(template("free")!, {})).toThrow("required");
+  expect(() => cleanParams(template("postcard")!, { title: "长".repeat(30) })).toThrow("at most");
 });
 
 test("overlay words stay out of the prompt", () => {

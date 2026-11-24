@@ -5,7 +5,7 @@ name: photo-play
 title: PhotoPlay
 description: Travel photo effects - upload a photo, pick an effect, compare the versions and download; every edit is a new version and the original is kept.
 icon: icon.svg
-url: /
+url: /?lang={lang}
 status: active
 repo: https://github.com/ericz-lab/photo-play.git
 i18n:

@@ -66,7 +66,7 @@ svg.icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-w
 .row, .actions { display: flex; align-items: center; gap: 9px; }
 .actions { flex-wrap: wrap; }
 .spread { justify-content: space-between; }
-.wrap, .shell { max-width: 1600px; margin-inline: auto; padding-inline: 24px; }
+.wrap, .shell { padding-inline: 24px; }
 :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 
 /* buttons */
@@ -89,15 +89,21 @@ button:disabled { opacity: .42; cursor: not-allowed; transform: none; }
 .bar { height: 56px; display: flex; align-items: center; gap: 28px; }
 .brand { display: flex; align-items: center; gap: 10px; font-size: 17px; font-weight: 680; min-height: 36px; }
 .brand small { font-weight: 500; }
-.mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: var(--r-control); background: var(--btn); color: var(--btn-ink); }
-.theme { margin-left: auto; }
-.notice { display: flex; align-items: center; gap: 9px; margin-top: 18px; background: var(--wash); border-radius: var(--r-control); padding: 8px 12px; color: var(--ink2); font-size: 12px; }
+.mark { display: block; width: 30px; height: 30px; }
+.mark img { display: block; width: 100%; height: 100%; }
+.prefs { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.seg { display: inline-flex; padding: 2px; border-radius: var(--r-control); background: var(--wash); }
+.seg button { min-height: 30px; padding: 0 10px; border: 0; background: transparent; box-shadow: none; font-size: 12px; color: var(--ink2); }
+.seg button[aria-pressed="true"] { background: var(--card); color: var(--ink); box-shadow: var(--seg); font-weight: 680; }
+.notice { display: flex; align-items: center; gap: 9px; background: var(--wash); border-bottom: 1px solid var(--line); padding: 8px 24px; color: var(--ink2); font-size: 12px; }
+.notice[hidden] { display: none; }
 .notice strong { color: var(--ink); }
 
 /* the one page: works on the left, the workspace on the right */
-.app { max-width: 1600px; margin-inline: auto; padding: 18px 24px 48px; display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 24px; align-items: start; }
-#view { min-width: 0; }
-.side { position: sticky; top: 74px; max-height: calc(100vh - 92px); display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+/* Full-bleed (ai-space docs/app-spec.md#app-pages): the two regions reach the window's edges, split by a 1px rule. */
+.app { display: grid; grid-template-columns: 260px minmax(0, 1fr); align-items: stretch; min-height: calc(100dvh - 57px); }
+#view { min-width: 0; padding: 18px 24px 48px; }
+.side { position: sticky; top: 57px; align-self: start; height: calc(100dvh - 57px); padding: 18px 16px; border-right: 1px solid var(--line); background: var(--bg2); display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .side-head { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; }
 .side-head h2 { font-size: 17px; }
 .side-head select { min-height: 32px; font-size: 12px; }
@@ -117,7 +123,7 @@ button:disabled { opacity: .42; cursor: not-allowed; transform: none; }
 .side-empty { font-size: 12px; color: var(--ink3); padding: 10px 4px; }
 .side-skel { min-height: 54px; border-radius: var(--r-control); }
 body.dragging::after {
-  content: "松手上传这张照片"; position: fixed; inset: 10px; z-index: 80; display: grid; place-items: center;
+  content: attr(data-drop); position: fixed; inset: 10px; z-index: 80; display: grid; place-items: center;
   border: 2px dashed var(--ink); border-radius: var(--r-panel); background: color-mix(in srgb, var(--bg) 82%, transparent);
   font-size: 18px; font-weight: 680; pointer-events: none;
 }
@@ -273,8 +279,10 @@ dialog p { font-size: 13px; margin-bottom: 14px; }
 }
 @media (max-width: 860px) {
   .wrap, .shell { padding-inline: 16px; }
-  .app { display: block; padding: 12px 16px 40px; }
-  .side { position: static; max-height: none; margin-bottom: 16px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .app { display: block; min-height: 0; }
+  #view { padding: 12px 16px 40px; }
+  .notice { padding-inline: 16px; }
+  .side { position: static; height: auto; padding: 12px 16px; border-right: 0; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
   .side-head { grid-column: 1 / -1; }
   .upload-btn { width: auto; }
   .side-new { grid-row: 2; grid-column: 1; }
