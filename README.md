@@ -24,8 +24,22 @@ bun run check            # typecheck + tests
 
 Without `SPACE_API_URL` and `SPACE_APP_TOKEN` the page opens but says generation is not ready.
 
-## Deploy
+## Install
 
-Push to a bare repository on the host whose `hooks/post-receive` is `deploy/post-receive` (checkout, install, sync, restart), or `DEPLOY_HOST=<ssh host> ./deploy.sh` and then `POST /api/apps/sync` there. The ai-space there must include `POST /api/model/image` (ai-space commit `feat(model): make images through codex's image tool`).
+From an ai-space Space's app catalog, or `space app install photo-play`. New pictures need the Space to have a `codex` runtime; without one the works, comparing, editing the words and downloading still work.
 
-This is an [ai-space](https://github.com/Zhang-Shubo/ai-space) app; the contract is its `docs/app-spec.md`.
+## Deploy from git
+
+Push to a bare repository on the host whose `hooks/post-receive` is `deploy/post-receive` (checkout, install, checks, restart), or `DEPLOY_HOST=<ssh host> ./deploy.sh` and then `POST /api/apps/sync` there. The ai-space there must include `POST /api/model/image`.
+
+## Release
+
+Raise `version` in `space.release.yaml` and `package.json`, commit, and push a tag `v<version>`; the release workflow builds, signs and attaches the packages, and the catalog lists them. `bun run pack` builds the same packages locally.
+
+## Samples
+
+The before/after pictures on the start screen are open-licence photos (CC0 / public domain) with one real run of each effect; sources are in [web/samples/README.md](web/samples/README.md).
+
+## License
+
+MIT. This is an [ai-space](https://github.com/ericz-lab/ai-space) app; the contract is its `docs/app-spec.md`.

@@ -19,6 +19,10 @@ const interrupted = store.recoverInterrupted();
 if (interrupted) console.log(`[photo-play] ${interrupted} job(s) cut off by the last stop marked for checking`);
 const worker = new Worker(store, generate, config.jobTimeoutSec * 1000);
 
+// The bundled release (dist/index.js) finds its page's files from the working directory: run in its
+// own. The data paths above are already absolute.
+if (!Bun.main.endsWith(".ts")) process.chdir(import.meta.dir);
+
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: config.port,

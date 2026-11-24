@@ -1,0 +1,66 @@
+# The installation package's declaration (ai-space docs/app-packages.md, docs/app-catalog.md).
+# space.yaml stays spec 1 for the git deployment; the components here (everything but spec,
+# version, requires, offline, launch and build) must equal its own: src/release.test.ts checks.
+# Release: raise `version` (and package.json's), then tag v<version>; .github/workflows/release.yml
+# builds, signs and publishes. `bun run pack` builds the same packages locally.
+
+spec: 2
+name: photo-play
+version: 0.1.0
+title: PhotoPlay
+description: Travel photo effects - upload a photo, pick an effect, compare the versions and download; every edit is a new version and the original is kept.
+icon: icon.svg
+status: active
+repo: https://github.com/ericz-lab/photo-play.git
+i18n:
+  zh:
+    title: 旅行出片
+    description: 上传一张旅行照片，选个玩法（清理背景、调光调色、明信片、手绘注释、自由描述），对比、继续改、下载；每次修改都是新版本，原图保留。
+    widgets:
+      recent: { title: 旅行出片 · 最近作品 }
+
+# Pictures come from POST /api/model/image, which only codex-cli serves; the tag is the template id.
+model:
+  default: codex/intermediate
+
+widgets:
+  - name: recent
+    title: PhotoPlay · Recent
+    kind: items
+    source: /api/widget
+    link: /
+    size: 2x1
+    refresh: 2m
+
+storage:
+  database: sqlite
+  blobs: file
+
+backup:
+  include: [databases, files, blobs]
+
+requires:
+  spaceApi: 1
+  bun: 1.3.0
+
+offline:
+  features:
+    - The works, every version, comparing, editing the words over a picture and downloading
+  online:
+    - New pictures (the Space's image model, a codex runtime)
+
+# The bundle `bun run build` makes (the page and the sample pictures are inside dist/); ai-space
+# hands over PORT. Background: a generation runs on the server for up to PHOTO_JOB_TIMEOUT after
+# the page is closed.
+launch:
+  kind: process
+  runtime: bun
+  entry: dist/index.js
+  mode: background
+  health: /healthz
+
+# How a checkout becomes the package: in a scratch copy, never in this tree.
+build:
+  install: bun install --frozen-lockfile
+  run: bun run build
+  include: [dist, icon.svg]

@@ -28,12 +28,14 @@ src/index.ts         * boot: store, restart recovery, worker, Bun.serve
 src/app.ts           * HTTP routes
 src/db.ts            * schema, assets (hash-named files), artworks, jobs
 src/templates.ts     * effects: parameters, prompts, overlay fields
+src/release.test.ts    space.release.yaml stays in step with space.yaml
 src/worker.ts          one-at-a-time job runner
 src/widget.ts          the panel card: items and state blocks
 src/model.ts           ai-space model-service client
 src/images.ts          type sniffing, dimensions, EXIF stripping
-web/                   the page (index.html, app.ts, styles.css)
-deploy/, deploy.sh     systemd unit and rsync deploy
+web/                   the page (index.html, app.ts, styles.css); web/samples: the effect samples and their sources
+deploy/, deploy.sh     post-receive hook, systemd unit and rsync deploy
+space.release.yaml     the store package (spec 2); scripts/pack.ts, .github/workflows/release.yml
 ```
 
 ## Conventions
@@ -58,10 +60,14 @@ See `.env.example`. Provided by ai-space: `PORT`, `SPACE_APP`, `SPACE_APP_DIR`, 
 
 ## Deployment
 
-- Host: the space host (ssh alias `<host>`), workspace `~/.ai-space`, `SPACE_SUPERVISOR=space`: the unit is `space-photo-play.service`, written by ai-space.
-- Deploy: `git push deploy main` (bare repository `~/photo-play.git`, hook = `deploy/post-receive`: checkout, `bun install`, `POST /api/apps/sync`, restart). GitHub: `origin` (private).
-- Port 8975, public URL `https://photo-play.<SPACE_DOMAIN>/` through the space's router.
-- Pictures: The host's `codex` runtime runs over ssh on another machine's Codex login (the space's `runtimes.yaml`); `model.default: codex/intermediate` pins it, because the space's default runtime there is Claude Code, which makes no images.
+- Runs on the space host as an ai-space supervised service (`space-photo-play.service`, user level), port 8975; `space app service photo-play`, `space app restart photo-play`, logs `journalctl --user -u space-photo-play -f`.
+- Deploy: `git push deploy main` to the bare repository `<workspace>/repos/photo-play.git` on that host; its `post-receive` hook (`deploy/post-receive`) runs `space app deploy photo-play`: checkout, `bun install --frozen-lockfile`, `deploy.check`, restart, wait for `/healthz`; a failure keeps the previous tree and service. A new app's first deploy also needs `space app sync` on that host.
+- Public URL: the space router's wildcard hostname `photo-play.<SPACE_DOMAIN>`, behind the space's access layer.
+- Pictures need a `codex` runtime on the space (the only kind that makes images); `model.default: codex/intermediate` pins it, because a space's default runtime may be one that makes no images.
+- Source: GitHub `ericz-lab/photo-play` (public, MIT, remote `origin`). After a deploy, `git push origin main`.
+- App store: `space.release.yaml` (spec 2) is the package; it must carry `space.yaml`'s components minus `service`/`url`/`deploy` (`src/release.test.ts`). To release: raise `version` there and in `package.json`, commit, tag `v<version>`, push the tag; `.github/workflows/release.yml` builds `dist/` (`bun run build`: the service with the page and the sample pictures), packs `dist` and `icon.svg`, signs with the `SPACE_SIGN_KEY` secret and attaches the `.spaceapp` files to the GitHub release. Then the catalog (`ericz-lab/ai-space-apps`) lists the new version. `bun run pack` (with `SPACE_CLI` pointing at an ai-space that has `app release`) builds the same packages locally.
+- The bundle finds the page's files from the working directory, so `src/index.ts` changes into `dist/` when it runs bundled; never use `new URL(..., import.meta.url).pathname` (breaks on Windows).
+- Keep `bun.lock` at `"lockfileVersion": 1` while a host runs Bun 1.3.
 
 ## Known pitfalls
 
