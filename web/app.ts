@@ -1,9 +1,21 @@
 /**
- * The page: home (upload, effects, recent works), the editor of one artwork
- * (versions, compare, text overlay, download, a new edit) and the gallery.
+ * The page, one screen: the works on the left; on the right the start (upload,
+ * effects with a real before/after each) or the editor of one artwork
+ * (versions, compare, text overlay, download, a new edit).
  * Hash routes, no framework. Everything that costs a model call is a job on
  * the server; the page only polls it, so closing the tab loses nothing.
  */
+
+import cleanupBefore from "./samples/cleanup-before.jpg";
+import cleanupAfter from "./samples/cleanup-after.jpg";
+import lightBefore from "./samples/light-before.jpg";
+import lightAfter from "./samples/light-after.jpg";
+import postcardBefore from "./samples/postcard-before.jpg";
+import postcardAfter from "./samples/postcard-after.jpg";
+import annotateBefore from "./samples/annotate-before.jpg";
+import annotateAfter from "./samples/annotate-after.jpg";
+import freeBefore from "./samples/free-before.jpg";
+import freeAfter from "./samples/free-after.jpg";
 
 type Param =
   | { key: string; label: string; kind: "select"; options: { value: string; label: string }[]; default: string }
@@ -222,72 +234,181 @@ async function compose(job: JobView): Promise<HTMLCanvasElement> {
 
 const hasWords = (j: JobView) => j.overlayStyle !== "none" && Object.entries(j.overlay).some(([k, v]) => k !== "position" && k !== "scale" && v);
 
-// ------------------------------------------------------------------ home
+// ------------------------------------------------------------------ look
 
-async function renderHome() {
-  view.replaceChildren(
-    h("section", { class: "hero" },
-      h("div", { class: "hero-text" },
-        h("h1", {}, "把旅行照片，变成想发的那张"),
-        h("p", {}, "上传一张照片，选个玩法，调几个参数。原图和每个版本都会保留，可以对比、继续改、随时下载。"),
-      ),
-      h("button", { class: "drop", id: "drop", onclick: () => openPicker() },
-        h("span", { class: "drop-icon" }, "＋"),
-        h("strong", {}, "上传照片"),
-        h("span", { class: "muted" }, matchMedia("(pointer: fine)").matches ? "点击选择，或把照片拖到这里" : "从相册选择一张照片"),
-      ),
-    ),
-    h("h2", { class: "section" }, "玩法"),
-    h("div", { class: "effects" }, ...templates.map((t) =>
-      h("button", { class: "effect", onclick: () => openPicker(t.id) },
-        h("span", { class: "badge" }, t.badge),
-        h("strong", {}, t.name),
-        h("span", { class: "muted" }, t.summary),
-      ))),
-    h("div", { class: "section-row" }, h("h2", { class: "section" }, "最近作品"), h("a", { href: "#/works", class: "more" }, "全部 →")),
-    h("div", { class: "grid", id: "recent" }, h("p", { class: "muted" }, "加载中…")),
+/** Markup to one element; used for the SVG icons and illustrations, which `h` cannot make. */
+function markup(html: string): Element {
+  const t = document.createElement("template");
+  t.innerHTML = html.trim();
+  return t.content.firstElementChild!;
+}
+const icon = (id: string) => markup(`<svg class="icon" aria-hidden="true"><use href="#${id}" /></svg>`);
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** An effect's picture: the result of its sample run, or a plain photo mark. */
+const art = (id: string): Element => {
+  const sample = SAMPLES[id];
+  return sample ? h("img", { class: "art", src: sample.after, alt: "", loading: "lazy" }) : h("span", { class: "art art-blank" }, icon("i-photo"));
+};
+
+/** A confirm in the page's own dialog. */
+function ask(title: string, text: string, yes: string): Promise<boolean> {
+  const d = $<HTMLDialogElement>("#confirm");
+  $("#confirm-title").textContent = title;
+  $("#confirm-text").textContent = text;
+  $("#confirm-yes").textContent = yes;
+  return new Promise((resolve) => {
+    const done = (v: boolean) => { d.close(); resolve(v); };
+    $("#confirm-yes").onclick = () => done(true);
+    $("#confirm-no").onclick = () => done(false);
+    d.oncancel = () => resolve(false);
+    d.showModal();
+  });
+}
+
+function setupTheme() {
+  const root = document.documentElement;
+  $("#theme").addEventListener("click", () => {
+    const now = root.dataset.theme ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    root.dataset.theme = now === "dark" ? "light" : "dark";
+    try { localStorage.setItem("photoplay-theme", root.dataset.theme); } catch { /* the theme just isn't remembered */ }
+  });
+}
+
+// ------------------------------------------------------------------ side: the works, always there
+
+const side = $("#side");
+/** The effect the works list is filtered by; null: all. */
+let sideFilter: string | null = null;
+/** The artwork open in the editor; null: the start screen. */
+let openId: number | null = null;
+let sideSeq = 0;
+
+async function renderSide() {
+  const seq = ++sideSeq;
+  const filter = h("select", { "aria-label": "按玩法筛选" },
+    h("option", { value: "", selected: !sideFilter }, "全部玩法"),
+    ...templates.map((t) => h("option", { value: t.id, selected: sideFilter === t.id }, t.name))) as HTMLSelectElement;
+  filter.addEventListener("change", () => { sideFilter = filter.value || null; void renderSide(); });
+  const list = h("div", { class: "side-list" }, ...[0, 1, 2].map(() => h("div", { class: "skeleton side-skel" })));
+  const count = h("small", {});
+  side.replaceChildren(
+    h("div", { class: "side-head" }, h("div", { class: "row" }, h("h2", {}, "作品"), count), filter),
+    h("button", { class: "primary upload-btn", type: "button", onclick: () => openPicker() }, icon("i-up"), "上传照片"),
+    h("a", { class: `side-new${openId === null ? " on" : ""}`, href: "#/" }, icon("i-plus"), "新的作品"),
+    list,
   );
-  const drop = $("#drop");
-  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
-  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-  drop.addEventListener("drop", (e) => {
+  try {
+    const { artworks } = await api<{ artworks: ArtworkView[] }>(`/api/artworks${sideFilter ? `?template=${sideFilter}` : ""}`);
+    if (seq !== sideSeq) return;
+    count.textContent = String(artworks.length);
+    list.replaceChildren(...(artworks.length ? artworks.map(item) : [h("p", { class: "side-empty" }, sideFilter ? `还没有用「${tpl(sideFilter)?.name ?? sideFilter}」做过的作品。` : "还没有作品。上传第一张旅行照片吧。")]));
+  } catch (e) {
+    if (seq !== sideSeq) return;
+    list.replaceChildren(h("div", { class: "side-empty error" }, `作品读取失败：${(e as Error).message}`, h("br"), h("button", { type: "button", onclick: () => void renderSide() }, icon("i-retry"), "重试")));
+  }
+}
+
+function item(a: ArtworkView): HTMLElement {
+  return h("a", { class: "item", href: `#/a/${a.id}`, "aria-current": openId === a.id ? "page" : null },
+    h("img", { src: thumb(a.cover), alt: "", loading: "lazy" }),
+    h("span", { class: "item-copy" },
+      h("strong", {}, a.title || when(a.createdAt)),
+      h("small", {}, a.versions ? `${a.versions} 个版本` : "原图", a.pending ? h("span", { class: "busy-mark" }, ` · ${a.pending} 张生成中`) : null),
+    ),
+  );
+}
+
+// ------------------------------------------------------------------ start: no artwork open
+
+async function renderStart() {
+  const fine = matchMedia("(pointer: fine)").matches;
+  view.replaceChildren(
+    h("section", { class: "start" },
+      h("div", { class: "drop", id: "drop", role: "button", tabindex: 0, "aria-label": "选择一张旅行照片",
+        onclick: () => openPicker(),
+        onkeydown: (e: KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPicker(); } } },
+        h("span", { class: "uploadmark" }, icon("i-photo")),
+        h("strong", {}, fine ? "把旅行照片拖到这里" : "选一张旅行照片"),
+        h("span", { class: "button primary" }, icon("i-up"), "选择照片"),
+        h("small", {}, "JPG、PNG、WebP 等常见格式 · 原图和每个版本都会保留"),
+      ),
+      h("div", { class: "section-head" }, h("h2", {}, "或先选个玩法"), h("small", {}, "选好再挑照片，进来就用这个玩法")),
+      h("div", { class: "play-grid" }, ...templates.map(playCard)),
+    ),
+  );
+}
+
+/**
+ * One real run of each effect on an open-licence photo (web/samples/README.md): the
+ * result and the photo under a wipe. Words the page would draw go on top as text.
+ */
+const SAMPLES: Record<string, { before: string; after: string }> = {
+  cleanup: { before: cleanupBefore, after: cleanupAfter },
+  light: { before: lightBefore, after: lightAfter },
+  postcard: { before: postcardBefore, after: postcardAfter },
+  annotate: { before: annotateBefore, after: annotateAfter },
+  free: { before: freeBefore, after: freeAfter },
+};
+const sampleWords = (id: string): HTMLElement | null =>
+  id === "postcard" ? h("span", { class: "words post" }, h("strong", {}, "布拉耶斯湖"), h("span", {}, "多洛米蒂 · 2026.07.12"))
+  : id === "annotate" ? h("span", { class: "words hand" }, h("strong", {}, "终于爬上来了！"), h("span", {}, "山顶的风"))
+  : null;
+
+function playCard(t: Template): HTMLElement {
+  const pick = () => openPicker(t.id);
+  const sample = SAMPLES[t.id];
+  if (!sample) {
+    return h("button", { class: "play", type: "button", onclick: pick }, art(t.id), h("span", { class: "caption" }, h("strong", {}, t.name), h("small", {}, t.summary)));
+  }
+  const before = h("img", { class: "before", src: sample.before, alt: "", loading: "lazy", draggable: "false" });
+  const line = h("span", { class: "split" });
+  const range = h("input", { type: "range", min: 0, max: 100, value: 50, class: "wipe", "aria-label": `${t.name}：拖动对比原图和效果` }) as HTMLInputElement;
+  const set = (v: number) => {
+    const x = Math.max(0, Math.min(100, v));
+    before.style.clipPath = `inset(0 ${100 - x}% 0 0)`;
+    line.style.left = `${x}%`;
+    range.value = String(Math.round(x));
+  };
+  range.addEventListener("input", () => set(Number(range.value)));
+  const shot = h("div", { class: "shot" },
+    h("img", { class: "after", src: sample.after, alt: `${t.name}的效果示例`, loading: "lazy", draggable: "false" }),
+    sampleWords(t.id),
+    before, line,
+    h("span", { class: "label l" }, "原图"), h("span", { class: "label r" }, "效果"),
+    range,
+  );
+  // With a mouse the wipe follows the pointer; a finger drags the range itself.
+  shot.addEventListener("pointermove", (e) => {
+    if (e.pointerType !== "mouse") return;
+    const r = shot.getBoundingClientRect();
+    set(((e.clientX - r.left) / r.width) * 100);
+  });
+  shot.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") set(50); });
+  set(50);
+  return h("div", { class: "play sample" },
+    shot,
+    h("button", { class: "caption", type: "button", onclick: pick, "aria-label": `用「${t.name}」开始：选一张照片` },
+      h("span", { class: "caption-text" }, h("strong", {}, t.name), h("small", {}, t.summary)),
+      h("span", { class: "go", "aria-hidden": "true" }, icon("i-arrow"))),
+  );
+}
+
+/** A photo dropped anywhere on the page starts a new artwork. */
+function setupDrop() {
+  let depth = 0;
+  const hasFile = (e: DragEvent) => [...(e.dataTransfer?.types ?? [])].includes("Files");
+  document.addEventListener("dragenter", (e) => { if (!hasFile(e)) return; depth++; document.body.classList.add("dragging"); });
+  document.addEventListener("dragleave", (e) => { if (!hasFile(e)) return; if (--depth <= 0) { depth = 0; document.body.classList.remove("dragging"); } });
+  document.addEventListener("dragover", (e) => { if (hasFile(e)) e.preventDefault(); });
+  document.addEventListener("drop", (e) => {
+    if (!hasFile(e)) return;
     e.preventDefault();
-    drop.classList.remove("over");
-    const f = (e as DragEvent).dataTransfer?.files?.[0];
+    depth = 0;
+    document.body.classList.remove("dragging");
+    const f = e.dataTransfer?.files?.[0];
     if (f) void upload(f);
   });
-  try {
-    const { artworks } = await api<{ artworks: ArtworkView[] }>("/api/artworks");
-    $("#recent").replaceChildren(...(artworks.length ? artworks.slice(0, 6).map(card) : [h("p", { class: "muted empty" }, "还没有作品。上传第一张照片试试。")]));
-  } catch (e) {
-    $("#recent").replaceChildren(h("p", { class: "error" }, (e as Error).message));
-  }
-}
-
-function card(a: ArtworkView): HTMLElement {
-  return h("a", { class: "card", href: `#/a/${a.id}` },
-    h("img", { src: thumb(a.cover), alt: "", loading: "lazy" }),
-    h("div", { class: "card-meta" },
-      h("strong", {}, a.title || when(a.createdAt)),
-      h("span", { class: "muted" }, a.pending ? `${a.versions} 个版本 · ${a.pending} 个生成中` : `${a.versions} 个版本`),
-    ),
-  );
-}
-
-// ------------------------------------------------------------------ works
-
-async function renderWorks(filter: string | null) {
-  const chips = h("div", { class: "chips" },
-    h("a", { class: `chip${filter ? "" : " on"}`, href: "#/works" }, "全部"),
-    ...templates.map((t) => h("a", { class: `chip${filter === t.id ? " on" : ""}`, href: `#/works?t=${t.id}` }, `${t.badge} ${t.name}`)));
-  const grid = h("div", { class: "grid" }, h("p", { class: "muted" }, "加载中…"));
-  view.replaceChildren(h("h1", { class: "page-title" }, "作品"), chips, grid);
-  try {
-    const { artworks } = await api<{ artworks: ArtworkView[] }>(`/api/artworks${filter ? `?template=${filter}` : ""}`);
-    grid.replaceChildren(...(artworks.length ? artworks.map(card) : [h("p", { class: "muted empty" }, "这里还没有作品。")]));
-  } catch (e) {
-    grid.replaceChildren(h("p", { class: "error" }, (e as Error).message));
-  }
 }
 
 // ------------------------------------------------------------------ editor
@@ -305,57 +426,100 @@ type EditorState = {
   submitting: boolean;
 };
 
+/** The parameters of a job in words, from its template. */
+function paramText(j: JobView): string {
+  const t = tpl(j.templateId);
+  if (!t) return "";
+  const words: string[] = [];
+  for (const p of t.params) {
+    const v = j.params[p.key];
+    if (v === undefined || v === "") continue;
+    if (p.kind === "select") words.push(p.options.find((o) => o.value === v)?.label ?? String(v));
+    else if (p.kind === "range") words.push(p.labels[Number(v) - p.min] ?? String(v));
+    else if (!p.overlay) words.push(String(v).length > 16 ? `${String(v).slice(0, 16)}…` : String(v));
+  }
+  return words.join(" / ");
+}
+
 async function renderEditor(id: number) {
-  view.replaceChildren(h("p", { class: "muted pad" }, "加载中…"));
+  view.replaceChildren(h("div", { class: "heading" }, h("div", { class: "skeleton", style: "min-height:40px;width:260px" })), h("div", { class: "skeleton", style: "min-height:420px" }));
   let data: { artwork: ArtworkView; jobs: JobView[] };
   try {
     data = await api(`/api/artworks/${id}`);
   } catch (e) {
-    view.replaceChildren(h("p", { class: "error pad" }, (e as Error).message), h("a", { href: "#/" }, "回到首页"));
+    view.replaceChildren(h("div", { class: "state error", style: "margin-top:24px" }, `这个作品打不开：${(e as Error).message}`, h("br"),
+      h("button", { type: "button", onclick: () => void renderEditor(id) }, icon("i-retry"), "重试"), " ", h("a", { class: "button", href: "#/" }, "回到开始")));
     return;
   }
   const latest = [...data.jobs].reverse().find((j) => j.status !== "failed") ?? null;
   const st: EditorState = {
     art: data.artwork, jobs: data.jobs, selected: latest?.id ?? null, compare: false,
-    templateId: pendingTemplate ?? latest?.templateId ?? templates[0]!.id, fromSelected: false, submitKey: key(), submitting: false,
+    templateId: pendingTemplate ?? latest?.templateId ?? templates[0]!.id, fromSelected: !!latest && latest.status === "done", submitKey: key(), submitting: false,
   };
   pendingTemplate = null;
 
-  const stage = h("div", { class: "stage" });
-  const strip = h("div", { class: "strip" });
-  const info = h("div", { class: "info" });
-  const form = h("div", { class: "form" });
-  const title = h("input", { class: "title-input", value: st.art.title, placeholder: "给作品起个名字", maxlength: 60 }) as HTMLInputElement;
+  const mat = h("div", { class: "mat" });
+  const versionTag = h("span", { class: "tag" });
+  const compareBtn = h("button", { type: "button", "aria-pressed": "false", onclick: () => { st.compare = !st.compare; void drawStage(); } }, icon("i-compare"), "对比修改前") as HTMLButtonElement;
+  const expandBtn = h("button", { class: "icon-btn", type: "button", "aria-label": "放大查看", onclick: () => { const c = mat.querySelector("canvas, img") as HTMLCanvasElement | HTMLImageElement | null; if (c) openLightbox(c); } }, icon("i-expand"));
+  const strip = h("div", { class: "versions" });
+  const count = h("small", {});
+  const info = h("section", { class: "panel" });
+  const words = h("section", { class: "panel" });
+  const form = h("section", { class: "panel", id: "new-edit" });
+  const title = h("input", { class: "title-input", value: st.art.title, placeholder: "给作品起个名字", maxlength: 60, "aria-label": "作品名称" }) as HTMLInputElement;
   title.addEventListener("change", async () => {
-    try { await api(`/api/artworks/${id}`, { method: "PATCH", body: JSON.stringify({ title: title.value }) }); toast("已保存"); } catch (e) { toast((e as Error).message, "error"); }
+    try { await api(`/api/artworks/${id}`, { method: "PATCH", body: JSON.stringify({ title: title.value }) }); toast("已保存"); void renderSide(); } catch (e) { toast((e as Error).message, "error"); }
   });
-  const del = h("button", { class: "link danger", onclick: async () => {
-    if (!confirm("删除这个作品和它的全部版本？原图如果没有被别的作品使用，也会一并删除。")) return;
-    try { await api(`/api/artworks/${id}`, { method: "DELETE" }); toast("已删除"); location.hash = "#/works"; } catch (e) { toast((e as Error).message, "error"); }
+  const del = h("button", { class: "ghost danger", type: "button", onclick: async () => {
+    if (!(await ask("删除这个作品？", "它的全部版本会一起删除；原图如果没有被别的作品使用，也会删除。", "删除作品"))) return;
+    try { await api(`/api/artworks/${id}`, { method: "DELETE" }); toast("已删除"); location.hash = "#/"; } catch (e) { toast((e as Error).message, "error"); }
   } }, "删除作品");
 
-  view.replaceChildren(h("div", { class: "editor" },
-    h("div", { class: "left" }, stage, strip),
-    h("div", { class: "right" }, title, info, form, h("div", { class: "foot" }, del)),
-  ));
+  view.replaceChildren(
+    h("div", { class: "heading" },
+      h("div", { style: "min-width:0;flex:1" },
+        h("div", { class: "title-row" }, title, h("button", { class: "ghost icon-btn", type: "button", "aria-label": "重命名作品", onclick: () => title.focus() }, icon("i-edit"))),
+      ),
+      del,
+    ),
+    h("div", { class: "desk" },
+      h("div", {},
+        h("section", { class: "viewer" },
+          h("div", { class: "viewer-bar" }, h("div", { class: "row" }, h("h2", {}, "作品预览"), versionTag), h("div", { class: "actions" }, compareBtn, expandBtn)),
+          mat,
+        ),
+        h("section", { class: "timeline" }, h("div", { class: "timeline-head" }, h("h2", {}, "版本记录"), count), strip),
+      ),
+      h("aside", { class: "inspector", "aria-label": "编辑面板" }, info, words, form),
+    ),
+  );
 
   const selectedJob = () => st.jobs.find((j) => j.id === st.selected) ?? null;
+  const numberOf = (jobId: number) => st.jobs.findIndex((x) => x.id === jobId) + 1;
+  const sourceOf = (j: JobView) => (j.parentId ? `版本 ${pad2(numberOf(j.parentId))}` : "原图");
   const assetOf = (assetId: number): AssetView | null => assetId === st.art.original.id ? st.art.original : st.jobs.find((j) => j.result?.id === assetId)?.result ?? null;
 
-  // The stage: the selected picture with its words, and the picture it was made from under a slider.
+  // The stage: the selected picture with its words, and the picture it was made from under a wipe.
   let stageFor = "";
   async function drawStage() {
     const j = selectedJob();
-    const sig = JSON.stringify([st.selected, st.compare, j?.status, j?.overlay]);
+    const done = !!j && j.status === "done" && !!j.result;
+    if (!done) st.compare = false;
+    compareBtn.disabled = !done;
+    compareBtn.setAttribute("aria-pressed", String(st.compare));
+    versionTag.textContent = j ? `版本 ${pad2(numberOf(j.id))}` : "原图";
+    const sig = JSON.stringify([st.selected, st.compare, j?.status, j?.ahead, j?.overlay]);
     if (sig === stageFor) return;
     stageFor = sig;
-    if (!j || j.status !== "done" || !j.result) {
+    if (!j || !done) {
       const img = h("img", { src: st.art.original.url, alt: "原图" }) as HTMLImageElement;
       img.addEventListener("load", () => void ensureThumb(st.art.original, img), { once: true });
-      const pendingNote = j && (j.status === "queued" || j.status === "running")
-        ? h("div", { class: "stage-note" }, h("div", { class: "spinner small" }), j.status === "queued" ? (j.ahead ? `排队中，前面还有 ${j.ahead} 个` : "即将开始") : "正在生成，通常需要 1 到 3 分钟")
+      const note = j && (j.status === "queued" || j.status === "running")
+        ? h("div", { class: "stage-note" }, h("div", { class: "spinner small" }), j.status === "queued" ? (j.ahead ? `排队第 ${j.ahead + 1} 位，先显示原图` : "马上开始，先显示原图") : "正在生成，通常需要 1 到 3 分钟")
+        : j ? h("div", { class: "stage-note" }, icon("i-alert"), j.status === "failed" ? "这一版没有生成出来，显示的是原图" : "这一版结果不明，显示的是原图")
         : null;
-      stage.replaceChildren(h("div", { class: "frame" }, img, pendingNote));
+      mat.replaceChildren(h("div", { class: "frame" }, img, note));
       return;
     }
     const canvas = await compose(j);
@@ -365,44 +529,69 @@ async function renderEditor(id: number) {
     if (st.compare) {
       const base = assetOf(j.baseId);
       const under = h("img", { class: "under", src: base?.url ?? st.art.original.url, alt: "修改前" });
-      const range = h("input", { type: "range", min: 0, max: 100, value: 50, class: "compare-range", "aria-label": "对比" }) as HTMLInputElement;
-      const setCut = () => (under.style.clipPath = `inset(0 ${100 - Number(range.value)}% 0 0)`);
+      const split = h("span", { class: "split" });
+      const range = h("input", { type: "range", min: 0, max: 100, value: 50, class: "wipe", "aria-label": "拖动对比修改前后" }) as HTMLInputElement;
+      const setCut = () => { under.style.clipPath = `inset(0 ${100 - Number(range.value)}% 0 0)`; split.style.left = `${range.value}%`; };
       range.addEventListener("input", setCut);
       setCut();
-      frame.append(under, h("span", { class: "tag left" }, "修改前"), h("span", { class: "tag right" }, "修改后"), range);
-    }
-    canvas.addEventListener("click", () => openLightbox(canvas));
-    stage.replaceChildren(frame);
+      frame.append(under, split, h("span", { class: "label l" }, j.parentId ? sourceOf(j) : "原图"), h("span", { class: "label r" }, `版本 ${pad2(numberOf(j.id))}`), range);
+    } else canvas.addEventListener("click", () => openLightbox(canvas));
+    mat.replaceChildren(frame);
   }
 
   function drawStrip() {
-    const item = (label: string, asset: AssetView | null, jobId: number | null, badge: string | null) =>
-      h("button", { class: `ver${st.selected === jobId ? " on" : ""}`, onclick: () => { st.selected = jobId; st.fromSelected = jobId !== null; drawAll(); } },
-        asset ? h("img", { src: thumb(asset), alt: "" }) : h("span", { class: "ver-empty" }, badge === "failed" ? "!" : badge === "unknown" ? "?" : "…"),
-        h("span", {}, label));
+    const tile = (jobId: number | null, pic: Node, name: (Node | string)[], note: string) =>
+      h("button", { class: "tile", type: "button", "aria-current": String(st.selected === jobId), onclick: () => { st.selected = jobId; const j = selectedJob(); st.fromSelected = !!j && j.status === "done"; drawAll(); } },
+        pic, h("strong", {}, ...name), h("small", {}, note));
+    const o = st.art.original;
     strip.replaceChildren(
-      item("原图", st.art.original, null, null),
-      ...st.jobs.map((j, i) => item(`${i + 1} ${tpl(j.templateId)?.badge ?? ""}`, j.result, j.id, j.status)),
+      tile(null, h("span", { class: "thumb" }, h("img", { src: thumb(o), alt: "", loading: "lazy" })), ["原图"], `${o.width}×${o.height} · 保留底片`),
+      ...st.jobs.map((j, i) => {
+        const pic = j.result ? h("span", { class: "thumb" }, h("img", { src: thumb(j.result), alt: "", loading: "lazy" }))
+          : j.status === "queued" || j.status === "running" ? h("span", { class: "thumb wait" }, icon("i-clock"))
+          : h("span", { class: "thumb bad" }, icon("i-alert"));
+        const state = j.status === "queued" ? `排队第 ${j.ahead + 1} 位` : j.status === "running" ? "生成中" : j.status === "failed" ? "失败" : j.status === "unknown" ? "待核对" : paramText(j);
+        return tile(j.id, pic, [h("span", { class: "no" }, pad2(i + 1)), j.templateName], [state, `来自${sourceOf(j)}`].filter(Boolean).join(" / "));
+      }),
     );
+    count.textContent = st.jobs.length ? `原图 + ${st.jobs.length} 个版本` : "只有原图";
   }
 
   function drawInfo() {
     const j = selectedJob();
+    const head = (tag: Node | null) => h("div", { class: "panel-head" }, h("h2", {}, "版本信息"), tag);
     if (!j) {
-      info.replaceChildren(h("p", { class: "muted" }, `原图 · ${st.art.original.width}×${st.art.original.height}`), download(st.art.original, `photoplay-${id}-original`, "下载原图"));
+      const o = st.art.original;
+      info.replaceChildren(
+        head(h("span", { class: "tag" }, "原图")),
+        h("dl", { class: "facts" },
+          h("div", {}, h("dt", {}, "尺寸"), h("dd", {}, `${o.width}×${o.height}`)),
+          h("div", {}, h("dt", {}, "上传于"), h("dd", {}, when(st.art.createdAt))),
+        ),
+        h("div", { class: "actions" }, download(o, `photoplay-${id}-original`, "下载原图"),
+          h("button", { type: "button", onclick: () => { st.fromSelected = false; drawForm(); focusForm(); } }, "从原图修改")),
+      );
+      if (!st.jobs.length) info.append(h("p", { class: "hint foot-note" }, "还没有版本。在下面选一个玩法，生成第一张。"));
       return;
     }
-    const statusText = { queued: j.ahead ? `排队中（前面 ${j.ahead} 个）` : "排队中", running: "生成中", done: "已完成", failed: "失败", unknown: "待核对" }[j.status];
+    const statusText = { queued: `排队第 ${j.ahead + 1} 位`, running: "生成中", done: "已完成", failed: "失败", unknown: "待核对" }[j.status];
     const took = seconds(j.startedAt, j.finishedAt);
-    const rows: (HTMLElement | null)[] = [
-      h("div", { class: "info-head" }, h("strong", {}, `${tpl(j.templateId)?.badge ?? ""} ${j.templateName}`), h("span", { class: `pill ${j.status}` }, statusText)),
-      h("p", { class: "muted small" }, `基于${j.parentId ? `版本 ${st.jobs.findIndex((x) => x.id === j.parentId) + 1}` : "原图"} · ${when(j.createdAt)}${took !== null ? ` · 用时 ${took} 秒` : ""}`),
-      j.extra ? h("p", { class: "small" }, `补充要求：${j.extra}`) : null,
-      j.error ? h("p", { class: "error small" }, j.error) : null,
-      j.model ? h("p", { class: "muted small" }, `模型：${j.runtime ? `${j.runtime}/` : ""}${j.model}${j.usage ? ` · ${(j.usage.inputTokens + j.usage.cacheReadTokens).toLocaleString()} 输入 / ${j.usage.outputTokens.toLocaleString()} 输出 tokens` : ""} · 费用：未知${j.callId ? `（ai-space 账本 #${j.callId}）` : ""}`) : null,
+    const rows: (Node | null)[] = [
+      head(h("span", { class: `tag ${j.status}` }, statusText)),
+      h("dl", { class: "facts" },
+        h("div", { class: "wide" }, h("dt", {}, "玩法参数"), h("dd", {}, [j.templateName, paramText(j)].filter(Boolean).join(" / "))),
+        h("div", {}, h("dt", {}, "来源"), h("dd", {}, sourceOf(j))),
+        h("div", {}, h("dt", {}, "用时"), h("dd", {}, took !== null ? `${Math.floor(took / 60)} 分 ${pad2(took % 60)} 秒` : "—")),
+        h("div", {}, h("dt", {}, "模型"), h("dd", {}, j.model ? `${j.runtime ? `${j.runtime}/` : ""}${j.model}` : "—")),
+        h("div", {}, h("dt", {}, "费用"), h("dd", {}, j.callId ? `未知（账本 #${j.callId}）` : "未知")),
+        j.usage ? h("div", { class: "wide" }, h("dt", {}, "tokens"), h("dd", {}, `${(j.usage.inputTokens + j.usage.cacheReadTokens).toLocaleString()} 输入 / ${j.usage.outputTokens.toLocaleString()} 输出`)) : null,
+        j.extra ? h("div", { class: "wide" }, h("dt", {}, "补充要求"), h("dd", {}, j.extra)) : null,
+      ),
+      j.error ? h("p", { class: "error small", style: "margin-bottom:10px" }, j.error) : null,
     ];
+    if (j.status === "queued" || j.status === "running") rows.push(h("p", { class: "hint" }, "服务器一次做一张，通常 1 到 3 分钟；关掉页面也不影响，做好会出现在版本记录里。"));
     if (j.status === "failed" || j.status === "unknown") {
-      rows.push(h("button", { class: "btn", onclick: async (e: Event) => {
+      rows.push(h("button", { type: "button", onclick: async (e: Event) => {
         const b = e.currentTarget as HTMLButtonElement;
         b.disabled = true;
         try {
@@ -412,27 +601,26 @@ async function renderEditor(id: number) {
           drawAll();
           poll();
         } catch (err) { toast((err as Error).message, "error"); b.disabled = false; }
-      } }, j.status === "unknown" ? "确认没有生成，手动重试" : "重试"));
+      } }, icon("i-retry"), j.status === "unknown" ? "确认没有生成，手动重试" : "重试"));
     }
     if (j.status === "done" && j.result) {
-      rows.push(h("div", { class: "row" },
-        h("label", { class: "switch" }, (() => { const c = h("input", { type: "checkbox" }) as HTMLInputElement; c.checked = st.compare; c.addEventListener("change", () => { st.compare = c.checked; void drawStage(); }); return c; })(), " 和修改前对比"),
-        h("button", { class: "link", onclick: () => window.open(j.result!.url, "_blank") }, "查看原尺寸"),
-      ));
-      if (j.overlayStyle !== "none") rows.push(overlayEditor(j));
-      const actions = h("div", { class: "row" });
+      const actions = h("div", { class: "actions" });
       if (hasWords(j)) {
-        actions.append(h("button", { class: "btn primary", onclick: async () => {
+        actions.append(h("button", { class: "primary", type: "button", onclick: async () => {
           const c = await compose(j);
           c.toBlob((b) => b && save(b, `photoplay-${id}-v${j.id}.png`), "image/png");
-        } }, "下载（含文字）"), download(j.result, `photoplay-${id}-v${j.id}-plain`, "下载无文字版"));
+        } }, icon("i-down"), "下载成品"), download(j.result, `photoplay-${id}-v${j.id}-plain`, "不带文字"));
       } else actions.append(download(j.result, `photoplay-${id}-v${j.id}`, "下载", true));
+      actions.append(h("button", { type: "button", onclick: () => { st.fromSelected = true; drawForm(); focusForm(); } }, "从此版本继续改"));
       rows.push(actions);
     }
-    info.replaceChildren(...rows.filter(Boolean) as HTMLElement[]);
+    info.replaceChildren(...rows.filter((x): x is Node => !!x));
   }
 
-  function overlayEditor(j: JobView): HTMLElement {
+  function drawWords() {
+    const j = selectedJob();
+    if (!j || j.status !== "done" || j.overlayStyle === "none") { words.hidden = true; return; }
+    words.hidden = false;
     const t = tpl(j.templateId);
     const fields = (t?.params ?? []).filter((p) => p.kind === "text" && p.overlay) as Extract<Param, { maxLength: number }>[];
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -446,27 +634,32 @@ async function renderEditor(id: number) {
       }, 500);
     };
     const set = (k: string, v: string) => { j.overlay = { ...j.overlay, [k]: v }; void drawStage(); saveOverlay(); };
-    const positions = j.overlayStyle === "postcard" ? [["bottom", "底部"], ["top", "顶部"]] : [["default", "标题在左上"], ["swap", "标题在右下"]];
-    return h("details", { class: "overlay-box", open: true },
-      h("summary", {}, "文字排版（改字不用重新生成）"),
-      ...fields.map((p) => {
-        const input = h("input", { value: j.overlay[p.key] ?? "", maxlength: p.maxLength, placeholder: p.placeholder ?? "" }) as HTMLInputElement;
-        input.addEventListener("input", () => set(p.key, input.value));
-        return h("label", { class: "field" }, h("span", {}, p.label), input);
-      }),
-      h("div", { class: "row" },
-        (() => {
-          const sel = h("select", {}, ...positions.map(([v, l]) => h("option", { value: v!, selected: (j.overlay.position || positions[0]![0]) === v }, l!))) as HTMLSelectElement;
-          sel.addEventListener("change", () => set("position", sel.value));
-          return h("label", { class: "field inline" }, h("span", {}, "位置"), sel);
-        })(),
-        (() => {
-          const r = h("input", { type: "range", min: 0.6, max: 1.6, step: 0.1, value: j.overlay.scale || 1 }) as HTMLInputElement;
-          r.addEventListener("change", () => set("scale", r.value));
-          return h("label", { class: "field inline" }, h("span", {}, "字号"), r);
-        })(),
+    const inputs = fields.map((p) => {
+      const input = h("input", { value: j.overlay[p.key] ?? "", maxlength: p.maxLength, placeholder: p.placeholder ?? "" }) as HTMLInputElement;
+      input.addEventListener("input", () => set(p.key, input.value));
+      return h("label", {}, h("span", {}, p.label), input);
+    });
+    const positions = j.overlayStyle === "postcard" ? [["bottom", "下方"], ["top", "上方"]] : [["default", "标题在左上"], ["swap", "标题在右下"]];
+    const now = j.overlay.position || positions[0]![0]!;
+    const seg = h("div", { class: "segmented", role: "group", "aria-label": "文字位置" }, ...positions.map(([v, l]) =>
+      h("button", { type: "button", "aria-pressed": String(now === v), onclick: (e: Event) => {
+        for (const b of seg.children) b.setAttribute("aria-pressed", String(b === e.currentTarget));
+        set("position", v!);
+      } }, l!)));
+    const size = h("input", { type: "range", min: 0.6, max: 1.6, step: 0.1, value: j.overlay.scale || 1, "aria-label": "字号" }) as HTMLInputElement;
+    size.addEventListener("change", () => set("scale", size.value));
+    words.replaceChildren(
+      h("div", { class: "panel-head" }, h("h2", {}, "文字层"), h("small", {}, "改字不用重新生成")),
+      h("div", { class: "fields" },
+        inputs[0] ?? null,
+        inputs.length > 2 ? h("div", { class: "two" }, ...inputs.slice(1)) : inputs[1] ?? null,
+        h("div", { class: "two" }, h("label", {}, h("span", {}, "位置"), seg), h("label", {}, h("span", {}, "字号"), size)),
       ),
     );
+  }
+
+  function focusForm() {
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function drawForm() {
@@ -480,27 +673,29 @@ async function renderEditor(id: number) {
         values[p.key] = p.default;
         const s = h("select", {}, ...p.options.map((o) => h("option", { value: o.value, selected: o.value === p.default }, o.label))) as HTMLSelectElement;
         s.addEventListener("change", () => (values[p.key] = s.value));
-        return h("label", { class: "field" }, h("span", {}, p.label), s);
+        return h("label", {}, h("span", {}, p.label), s);
       }
       if (p.kind === "range") {
         values[p.key] = p.default;
-        const out = h("em", {}, p.labels[p.default - p.min]!);
-        const r = h("input", { type: "range", min: p.min, max: p.max, step: 1, value: p.default }) as HTMLInputElement;
-        r.addEventListener("input", () => { values[p.key] = Number(r.value); out.textContent = p.labels[Number(r.value) - p.min]!; });
-        return h("label", { class: "field" }, h("span", {}, p.label, " ", out), r);
+        const seg = h("div", { class: "segmented", role: "group", "aria-label": p.label }, ...p.labels.map((l, i) =>
+          h("button", { type: "button", "aria-pressed": String(p.min + i === p.default), onclick: (e: Event) => {
+            values[p.key] = p.min + i;
+            for (const b of seg.children) b.setAttribute("aria-pressed", String(b === e.currentTarget));
+          } }, l)));
+        return h("div", { class: "fields" }, h("span", { class: "small", style: "color:var(--ink2)" }, p.label), seg);
       }
       values[p.key] = p.default ?? "";
       const el = (p.kind === "textarea" ? h("textarea", { rows: 3, maxlength: p.maxLength, placeholder: p.placeholder ?? "" }, p.default ?? "") : h("input", { value: p.default ?? "", maxlength: p.maxLength, placeholder: p.placeholder ?? "" })) as HTMLInputElement;
       el.addEventListener("input", () => (values[p.key] = el.value));
-      return h("label", { class: "field" }, h("span", {}, p.label, p.overlay ? h("small", { class: "muted" }, " · 由页面排版，可随时改") : null), el);
+      return h("label", {}, h("span", {}, p.label, p.overlay ? h("small", {}, " · 页面排版，之后可改") : null), el);
     });
     const extra = h("textarea", { rows: 2, maxlength: 300, placeholder: "可选：再补充一句要求" }) as HTMLTextAreaElement;
-    const button = h("button", { class: "btn primary big", disabled: !status.ready || st.submitting }, st.submitting ? "提交中…" : "生成新版本") as HTMLButtonElement;
+    const button = h("button", { class: "primary generate", type: "button", disabled: !status.ready || st.submitting }, icon("i-plus"), st.submitting ? "提交中…" : "生成新版本") as HTMLButtonElement;
     button.addEventListener("click", async () => {
       if (st.submitting) return;
       st.submitting = true;
       button.disabled = true;
-      button.textContent = "提交中…";
+      button.lastChild!.textContent = "提交中…";
       try {
         const { job } = await api<{ job: JobView }>("/api/jobs", { method: "POST", body: JSON.stringify({
           artworkId: id, parentId: st.fromSelected && sel ? sel.id : null, templateId: t.id, params: values, extra: t.id === "free" ? "" : extra.value, key: st.submitKey,
@@ -509,6 +704,7 @@ async function renderEditor(id: number) {
         st.selected = job.id;
         st.submitKey = key();
         toast("已提交，生成完成后会自动显示");
+        void renderSide();
         poll();
       } catch (e) {
         toast((e as Error).message, "error");
@@ -517,20 +713,24 @@ async function renderEditor(id: number) {
         drawAll();
       }
     });
+    const base = h("div", { class: "segmented", role: "group", "aria-label": "基于" },
+      h("button", { type: "button", "aria-pressed": String(!st.fromSelected), onclick: () => { st.fromSelected = false; drawForm(); } }, "原图"),
+      h("button", { type: "button", "aria-pressed": String(st.fromSelected), disabled: !canBuild, onclick: () => { st.fromSelected = true; drawForm(); } },
+        canBuild ? `版本 ${pad2(numberOf(sel!.id))}` : "当前版本"),
+    );
     form.replaceChildren(...[
-      h("h3", {}, "新的修改"),
-      h("div", { class: "chips" }, ...templates.map((x) => h("button", { class: `chip${x.id === t.id ? " on" : ""}`, onclick: () => { st.templateId = x.id; st.submitKey = key(); drawForm(); } }, `${x.badge} ${x.name}`))),
-      h("p", { class: "muted small" }, t.summary),
-      ...inputs,
-      t.id === "free" ? null : h("label", { class: "field" }, h("span", {}, "补充要求"), extra),
-      h("div", { class: "base-choice" },
-        h("span", {}, "基于"),
-        h("label", {}, (() => { const r = h("input", { type: "radio", name: "base", checked: !st.fromSelected }) as HTMLInputElement; r.addEventListener("change", () => { st.fromSelected = false; }); return r; })(), " 原图"),
-        h("label", { class: canBuild ? "" : "disabled" }, (() => { const r = h("input", { type: "radio", name: "base", checked: st.fromSelected, disabled: !canBuild }) as HTMLInputElement; r.addEventListener("change", () => { st.fromSelected = true; }); return r; })(), canBuild ? ` 当前版本 ${st.jobs.findIndex((x) => x.id === sel!.id) + 1}` : " 当前版本"),
+      h("div", { class: "panel-head" }, h("h2", {}, "新的修改"), h("small", {}, "输出 1 张")),
+      h("div", { class: "modes", role: "group", "aria-label": "玩法" }, ...templates.map((x) =>
+        h("button", { class: "mode", type: "button", "aria-pressed": String(x.id === t.id), onclick: () => { st.templateId = x.id; st.submitKey = key(); drawForm(); } }, art(x.id), x.name))),
+      h("p", { class: "hint", style: "margin-bottom:10px" }, t.summary),
+      h("div", { class: "fields" },
+        ...inputs,
+        t.id === "free" ? null : h("label", {}, h("span", {}, "补充要求"), extra),
+        h("div", { class: "fields" }, h("span", { class: "small", style: "color:var(--ink2)" }, "基于"), base),
+        h("p", { class: "hint" }, "费用未知（走 ai-space 的模型额度）· 原图和旧版本都会保留"),
+        !status.ready ? h("p", { class: "error small" }, "生成服务未接入，暂时不能生成（见页面顶部）") : null,
+        button,
       ),
-      h("p", { class: "muted small" }, "输出 1 张 · 费用：未知（走 ai-space 的模型额度） · 原图和旧版本都会保留"),
-      !status.ready ? h("p", { class: "error small" }, status.reason ?? "暂时无法生成") : null,
-      button,
     ].filter((x): x is HTMLElement => !!x));
   }
 
@@ -538,6 +738,7 @@ async function renderEditor(id: number) {
   function drawAll() {
     drawStrip();
     drawInfo();
+    drawWords();
     void drawStage();
     // The form keeps what the person typed unless what it depends on changed.
     const sel = selectedJob();
@@ -560,10 +761,15 @@ async function renderEditor(id: number) {
         st.jobs = fresh.jobs;
         for (const j of fresh.jobs) {
           const prev = was.get(j.id);
-          if (prev && prev !== j.status && j.status === "done") toast(`版本 ${fresh.jobs.indexOf(j) + 1} 生成好了`);
-          if (prev && prev !== j.status && j.status === "failed") toast(`版本 ${fresh.jobs.indexOf(j) + 1} 生成失败`, "error");
+          if (prev && prev !== j.status && j.status === "done") toast(`版本 ${pad2(fresh.jobs.indexOf(j) + 1)} 生成好了`);
+          if (prev && prev !== j.status && j.status === "failed") toast(`版本 ${pad2(fresh.jobs.indexOf(j) + 1)} 生成失败`, "error");
         }
-        if (JSON.stringify(st.jobs.map((j) => [j.id, j.status, j.ahead])) !== before) drawAll();
+        if (JSON.stringify(st.jobs.map((j) => [j.id, j.status, j.ahead])) !== before) {
+          const j = selectedJob();
+          if (j && j.status === "done" && was.get(j.id) !== "done") st.fromSelected = true;
+          drawAll();
+          void renderSide();
+        }
       } catch { /* keep polling */ }
       if (st.jobs.some((j) => j.status === "queued" || j.status === "running")) setTimeout(tick, 4000);
       else { alive = false; stopPolling = null; }
@@ -577,7 +783,7 @@ async function renderEditor(id: number) {
 }
 
 function download(a: AssetView, name: string, label: string, primary = false): HTMLElement {
-  return h("a", { class: `btn${primary ? " primary" : ""}`, href: `${a.url}?name=${encodeURIComponent(name)}` }, label);
+  return h("a", { class: `button${primary ? " primary" : ""}`, href: `${a.url}?name=${encodeURIComponent(name)}` }, icon("i-down"), label);
 }
 
 function save(blob: Blob, name: string) {
@@ -589,10 +795,10 @@ function save(blob: Blob, name: string) {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-function openLightbox(canvas: HTMLCanvasElement) {
+function openLightbox(pic: HTMLCanvasElement | HTMLImageElement) {
   const box = $("#lightbox");
-  const img = h("img", { src: canvas.toDataURL("image/jpeg", 0.92), alt: "" });
-  box.replaceChildren(h("button", { class: "close", "aria-label": "关闭", onclick: () => (box.hidden = true) }, "×"), img);
+  const img = h("img", { src: pic instanceof HTMLCanvasElement ? pic.toDataURL("image/jpeg", 0.92) : pic.src, alt: "" });
+  box.replaceChildren(h("button", { class: "close", type: "button", "aria-label": "关闭", onclick: () => (box.hidden = true) }, icon("i-close")), img);
   box.hidden = false;
   box.onclick = (e) => { if (e.target === box) box.hidden = true; };
 }
@@ -602,23 +808,26 @@ function openLightbox(canvas: HTMLCanvasElement) {
 async function route() {
   stopPolling?.();
   $("#lightbox").hidden = true;
-  const [path, query] = location.hash.replace(/^#/, "").split("?");
-  const parts = (path || "/").split("/").filter(Boolean);
-  for (const a of document.querySelectorAll<HTMLElement>("[data-nav]")) a.classList.toggle("on", a.dataset.nav === (parts[0] === "works" ? "works" : parts.length ? "" : "home"));
+  const parts = location.hash.replace(/^#/, "").split("?")[0]!.split("/").filter(Boolean);
+  const id = parts[0] === "a" && Number(parts[1]) ? Number(parts[1]) : null;
+  if (parts.length && !id) { history.replaceState(null, "", "#/"); }
+  openId = id;
+  void renderSide();
   window.scrollTo(0, 0);
-  if (parts[0] === "a" && Number(parts[1])) return renderEditor(Number(parts[1]));
-  if (parts[0] === "works") return renderWorks(new URLSearchParams(query).get("t"));
-  return renderHome();
+  if (id) return renderEditor(id);
+  return renderStart();
 }
 
 async function boot() {
+  setupTheme();
+  setupDrop();
   try {
     const [t, s] = await Promise.all([api<{ templates: Template[] }>("/api/templates"), api<{ ready: boolean; reason: string | null }>("/api/status")]);
     templates = t.templates;
     status = s;
     if (!s.ready) {
       const n = $("#notice");
-      n.textContent = s.reason ?? "暂时无法生成";
+      n.replaceChildren(icon("i-info"), h("span", {}, h("strong", {}, "暂时不能生成新版本"), `　${s.reason ?? "生成服务未接入"}。作品、改字和下载照常可用。`));
       n.hidden = false;
     }
   } catch (e) {
